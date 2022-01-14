@@ -9,10 +9,8 @@ const Blob = require('node-blob');
 const FileSystem = require("./FileSystem.js");
 
 global.data = {}
-global.extra = {}
 global.users = {}
-global.sockets = {}
-global.rooms = {}
+global.userData = {}
 
 app.use(cors())
 
@@ -49,14 +47,20 @@ io.on('connection', (socket) => {
             }
         }
         if (roomOwner) {
-            io.to(room).emit('set-isInitiator-true', args.sessionid)
+            for (var k in global.userData[extraData.domain][extraData.game_id][args.sessionid]) {
+                global.userData[extraData.domain][extraData.game_id][args.sessionid][k].socket.emit('set-isInitiator-true', args.sessionid)
+                break;
+            }
         }
+        delete global.userData[extraData.domain][extraData.game_id][args.sessionid][args.userid]
         global.users[extraData.domain][extraData.game_id][args.sessionid] = newArray
         global.data[extraData.domain][extraData.game_id][args.sessionid].current = global.users[extraData.domain][extraData.game_id][args.sessionid].length
         if (global.data[extraData.domain][extraData.game_id][args.sessionid].current === 0) {
             delete global.data[extraData.domain][extraData.game_id][args.sessionid];
         }
         roomOwner = false
+        socket.leave(room)
+        room = ''
     }
     socket.on('disconnect', () => {
         disconnect()
@@ -64,6 +68,10 @@ io.on('connection', (socket) => {
     socket.on('chat message', (msg) => {
         io.emit('chat message', msg);
     });
+    socket.on('close-entire-session', function(cb) {
+        io.to(room).emit('closed-entire-session', args.sessionid, extraData)
+        cb()
+    })
     socket.on('open-room', function(data, cb) {
         if (! global.data[data.extra.domain]) {
             global.data[data.extra.domain] = {}
@@ -75,10 +83,23 @@ io.on('connection', (socket) => {
             global.users[data.extra.domain] = {}
         }
         if (! global.users[data.extra.domain][data.extra.game_id]) {
-            global.users[data.extra.domain][data.extra.game_id] = []
+            global.users[data.extra.domain][data.extra.game_id] = {}
         }
         if (! global.users[data.extra.domain][data.extra.game_id][args.sessionid]) {
             global.users[data.extra.domain][data.extra.game_id][args.sessionid] = []
+        }
+        if (! global.userData[data.extra.domain]) {
+            global.userData[data.extra.domain] = {}
+        }
+        if (! global.userData[data.extra.domain][data.extra.game_id]) {
+            global.userData[data.extra.domain][data.extra.game_id] = {}
+        }
+        if (! global.userData[data.extra.domain][data.extra.game_id][args.sessionid]) {
+            global.userData[data.extra.domain][data.extra.game_id][args.sessionid] = {}
+        }
+        if (global.users[data.extra.domain][data.extra.game_id][args.sessionid].includes([args.userid])) {
+            socket.emit('userid-already-taken', args.userid)
+            return
         }
         global.data[data.extra.domain][data.extra.game_id][args.sessionid] = {
             owner_name: data.extra.name,
@@ -92,16 +113,21 @@ io.on('connection', (socket) => {
         
         socket.emit('extra-data-updated', args.userid, global.data[data.extra.domain][data.extra.game_id][args.sessionid])
         
+        global.userData[data.extra.domain][data.extra.game_id][args.sessionid][args.userid] = {
+            "socket": socket,
+            "extra": data.extra
+        }
         global.users[data.extra.domain][data.extra.game_id][args.sessionid].push(args.userid)
         room = data.extra.domain+':'+data.extra.game_id+':'+args.sessionid
         socket.join(room)
-        if (! global.rooms[room]) {
-            global.rooms[room] = {}
-        }
         roomOwner = true
         cb(true, undefined)
     })
     socket.on('join-room', function(data, cb) {
+        if (global.users[data.extra.domain][data.extra.game_id][args.sessionid].includes(args.userid)) {
+            socket.emit('userid-already-taken', args.userid)
+            return
+        }
         room = data.extra.domain+':'+data.extra.game_id+':'+data.sessionid
         
         for (var i=0; i< global.users[data.extra.domain][data.extra.game_id][args.sessionid].length; i++) {
@@ -137,6 +163,27 @@ io.on('connection', (socket) => {
         roomOwner = false
         cb(true, null)
     })
+    socket.on('changed-uuid', function(newUid, cb) {
+        var a = global.users[extraData.domain][extraData.game_id][args.sessionid]
+        if (a.includes(args.userid)) {
+            for (var i=0; i<a.length; i++) {
+                if (global.users[extraData.domain][extraData.game_id][args.sessionid][i] === args.userid) {
+                    global.users[extraData.domain][extraData.game_id][args.sessionid][i] = newUid
+                    break;
+                }
+            }
+        }
+        args.userid = newUid
+    });
+    socket.on('disconnect-with', function(userid, cb) {
+        for (var k in global.userData[extraData.domain][extraData.game_id][args.sessionid]) {
+            if (k === userid) {
+                global.userData[extraData.domain][extraData.game_id][args.sessionid][k].socket.emit('closed-entire-session', args.sessionid, extraData)
+                disconnect()
+            }
+        }
+        cb()
+    })
     socket.on('netplay', function(msg) {
         if (msg && msg.message && msg.message.userLeft === true) {
             disconnect()
@@ -149,7 +196,11 @@ io.on('connection', (socket) => {
         var outMsg = JSON.parse(JSON.stringify(msg))
         outMsg.country = 'US'
         extraData = outMsg
+        global.userData[extraData.domain][extraData.game_id][args.sessionid][args.userid].extra = extraData
         io.to(room).emit('extra-data-updated', args.userid, outMsg)
+    })
+    socket.on('get-remote-user-extra-data', function(id) {
+        socket.emit('extra-data-updated', global.userData[extraData.domain][extraData.game_id][args.sessionid][id].extra)
     })
 });
 
