@@ -123,6 +123,14 @@ io.on('connection', (socket) => {
         roomOwner = true
         cb(true, undefined)
     })
+    socket.on('check-presence', function(roomid, cb) {
+        if (global.data[data.extra.domain][data.extra.game_id][roomid]) {
+            cb(true, roomid, null)
+            return
+        }
+        cb(false, roomid, null)
+        return
+    })
     socket.on('join-room', function(data, cb) {
         if (global.users[data.extra.domain][data.extra.game_id][args.sessionid].includes(args.userid)) {
             socket.emit('userid-already-taken', args.userid)
